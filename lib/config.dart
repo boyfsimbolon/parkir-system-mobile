@@ -11,6 +11,12 @@ class AppConfig {
   static int get maxPhotoKb =>
       int.tryParse(dotenv.env['MAX_PHOTO_KB'] ?? '500') ?? 500;
 
+  static int get maxPhotoWidth =>
+      int.tryParse(dotenv.env['MAX_PHOTO_WIDTH'] ?? '1280') ?? 1280;
+
+  static int get maxPhotoHeight =>
+      int.tryParse(dotenv.env['MAX_PHOTO_HEIGHT'] ?? '960') ?? 960;
+
   static int get apiTimeoutSeconds =>
       int.tryParse(dotenv.env['API_TIMEOUT_SECONDS'] ?? '15') ?? 15;
 }

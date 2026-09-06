@@ -1,11 +1,48 @@
 import 'package:flutter/material.dart';
 import 'package:getwidget/getwidget.dart';
+import '../api.dart';
 import '../main.dart';
 import '../utils.dart';
 
-/// Info parkir + tarif + akun. Logout ada di sini.
-class InfoScreen extends StatelessWidget {
+/// Info parkir + tarif + akun. Validasi sesi setiap dibuka:
+/// kalau login tidak valid → auto logout + minta scan ulang.
+class InfoScreen extends StatefulWidget {
   const InfoScreen({super.key});
+
+  @override
+  State<InfoScreen> createState() => _InfoScreenState();
+}
+
+class _InfoScreenState extends State<InfoScreen> {
+  bool _checking = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _validate();
+  }
+
+  Future<void> _validate() async {
+    // Tampilkan data cache dulu, validasi jalan di background agar terasa instan.
+    // 401 (akun dicabut/dinonaktifkan) → auto-logout di refresh().
+    final session = SessionScope.of(context);
+    if (mounted) setState(() => _checking = false);
+    try {
+      await session.refresh();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (!e.unauthorized) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+      // 401 sudah auto-logout di refresh() → main gate pindah ke aktivasi.
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Tidak bisa memuat info terbaru (offline?).')));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -15,7 +52,12 @@ class InfoScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: GFAppBar(title: const Text('Info'), centerTitle: true),
-      body: ListView(
+      body: Column(
+        children: [
+          if (_checking)
+            const LinearProgressIndicator(minHeight: 2),
+          Expanded(
+            child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           GFCard(
@@ -88,6 +130,10 @@ class InfoScreen extends StatelessWidget {
             icon: const Icon(Icons.logout, color: Colors.white),
             color: Colors.red,
             fullWidthButton: true,
+          ),
+          const SizedBox(height: 16),
+        ],
+            ),
           ),
         ],
       ),

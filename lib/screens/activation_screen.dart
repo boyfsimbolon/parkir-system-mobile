@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:getwidget/getwidget.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../api.dart';
+import '../device.dart';
 import '../main.dart';
 
 /// Layar pertama: scan QR aktivasi dari admin (sekali saja, lalu permanen).
@@ -16,6 +18,17 @@ class _ActivationScreenState extends State<ActivationScreen> {
   final _controller = MobileScannerController();
   bool _busy = false;
   String? _error;
+  String? _notice;
+
+  @override
+  void initState() {
+    super.initState();
+    // Tampilkan alasan logout (mis. sesi tidak valid) sekali saja.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final n = SessionScope.of(context).takeNotice();
+      if (n != null && mounted) setState(() => _notice = n);
+    });
+  }
 
   @override
   void dispose() {
@@ -34,7 +47,14 @@ class _ActivationScreenState extends State<ActivationScreen> {
     });
     await _controller.stop();
     try {
-      final res = await session.api.activate(raw);
+      // Identitas HP agar tercatat di scanner_devices (tidak wajib untuk login).
+      String? uuid;
+      String? name;
+      try {
+        uuid = await DeviceId.installId(const FlutterSecureStorage());
+        name = await DeviceId.deviceName();
+      } catch (_) {}
+      final res = await session.api.activate(raw, deviceUuid: uuid, deviceName: name);
       await session.saveActivation(res);
       // AnimatedBuilder di main otomatis pindah ke HomeScreen.
     } on ApiException catch (e) {
@@ -87,6 +107,12 @@ class _ActivationScreenState extends State<ActivationScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.black54),
                   ),
+                  if (_notice != null) ...[
+                    const SizedBox(height: 10),
+                    Text(_notice!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w600)),
+                  ],
                   if (_error != null) ...[
                     const SizedBox(height: 10),
                     Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.red)),

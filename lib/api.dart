@@ -15,7 +15,10 @@ class ApiException implements Exception {
 
 class ApiClient {
   final String? Function() tokenProvider;
-  ApiClient({required this.tokenProvider});
+  final String? Function() refreshProvider;
+  final Future<void> Function(String access, String refresh)? onRefreshed;
+  ApiClient({required this.tokenProvider, String? Function()? refreshProvider, this.onRefreshed})
+      : refreshProvider = refreshProvider ?? (() => null);
 
   Map<String, String> get _headers {
     final t = tokenProvider();
@@ -34,29 +37,64 @@ class ApiClient {
     throw ApiException(r.statusCode, msg);
   }
 
-  Future<Map<String, dynamic>> _get(String path) async {
+  Future<Map<String, dynamic>> _get(String path, {bool retried = false}) async {
     final r = await http
         .get(Uri.parse('${AppConfig.apiBaseUrl}$path'), headers: _headers)
         .timeout(Duration(seconds: AppConfig.apiTimeoutSeconds));
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return _get(path, retried: true); // coba sekali lagi dengan token baru
+    }
     if (r.statusCode != 200) _throw(r);
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
+      {bool retried = false}) async {
     final r = await http
         .post(Uri.parse('${AppConfig.apiBaseUrl}$path'),
             headers: _headers, body: jsonEncode(body))
         .timeout(Duration(seconds: AppConfig.apiTimeoutSeconds));
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return _post(path, body, retried: true); // coba sekali lagi
+    }
     if (r.statusCode != 200 && r.statusCode != 201) _throw(r);
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
+  /// Silent refresh: tukar refresh token jadi access baru, simpan, lanjut.
+  /// Return false bila refresh gagal (pemanggil akan logout via 401).
+  Future<bool> _tryRefresh() async {
+    final rt = refreshProvider();
+    if (rt == null || rt.isEmpty || onRefreshed == null) return false;
+    try {
+      final r = await http
+          .post(Uri.parse('${AppConfig.apiBaseUrl}/api/mobile/refresh'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'refresh_token': rt}))
+          .timeout(Duration(seconds: AppConfig.apiTimeoutSeconds));
+      if (r.statusCode != 200) return false;
+      final b = jsonDecode(r.body) as Map<String, dynamic>;
+      await onRefreshed!(b['access_token'] as String, b['refresh_token'] as String);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ---- tanpa token ----
-  Future<Map<String, dynamic>> activate(String token) async {
+  Future<Map<String, dynamic>> activate(String token,
+      {String? deviceUuid, String? deviceName}) async {
+    final payload = <String, dynamic>{'token': token};
+    if (deviceUuid != null && deviceUuid.isNotEmpty) {
+      payload['device_uuid'] = deviceUuid;
+    }
+    if (deviceName != null && deviceName.isNotEmpty) {
+      payload['device_name'] = deviceName;
+    }
     final r = await http
         .post(Uri.parse('${AppConfig.apiBaseUrl}/api/mobile/activate'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'token': token}))
+            body: jsonEncode(payload))
         .timeout(Duration(seconds: AppConfig.apiTimeoutSeconds));
     if (r.statusCode != 200) _throw(r);
     return jsonDecode(r.body) as Map<String, dynamic>;
@@ -79,11 +117,13 @@ class ApiClient {
 
   Future<Map<String, dynamic>> checkin({
     required String barcode,
+    required String platNomor,
     required String vehicleType,
     required String photoUrl,
   }) =>
       _post('/api/mobile/checkin', {
         'barcode_data': barcode,
+        'plat_nomor': platNomor,
         'vehicle_type': vehicleType,
         'photo_url': photoUrl,
       });

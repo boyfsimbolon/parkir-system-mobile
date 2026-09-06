@@ -61,9 +61,12 @@ class _CheckoutDetailScreenState extends State<CheckoutDetailScreen> {
                   ),
                   Padding(
                     padding: const EdgeInsets.all(16),
-                    child: Column(
+                      child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Text((trx['plat_nomor'] as String?) ?? '-',
+                            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, letterSpacing: 2)),
+                        const SizedBox(height: 4),
                         Row(
                           children: [
                             GFBadge(text: trx['vehicle_type'] as String, color: const Color(0xFF2563EB)),

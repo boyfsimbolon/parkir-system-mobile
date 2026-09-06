@@ -18,6 +18,7 @@ class _LostQrScreenState extends State<LostQrScreen>
   List<dynamic> _items = [];
   bool _loading = true;
   String? _error;
+  String _query = '';
 
   @override
   bool get wantKeepAlive => true;
@@ -80,50 +81,82 @@ class _LostQrScreenState extends State<LostQrScreen>
     super.build(context);
     return Scaffold(
       appBar: GFAppBar(title: const Text('QR Hilang — Cari Manual'), centerTitle: true),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!),
-                        const SizedBox(height: 8),
-                        GFButton(onPressed: _load, text: 'Coba Lagi'),
-                      ],
-                    ),
-                  )
-                : _items.isEmpty
-                    ? const Center(child: Text('Tidak ada kendaraan parkir.'))
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(12),
-                        itemCount: _items.length,
-                        itemBuilder: (_, i) {
-                          final it = _items[i] as Map<String, dynamic>;
-                          return GFCard(
-                            padding: EdgeInsets.zero,
-                            content: GFListTile(
-                              avatar: ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  it['photo_url'] as String,
-                                  width: 64,
-                                  height: 64,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, err, stack) => const Icon(Icons.image_not_supported),
-                                ),
-                              ),
-                              titleText: it['vehicle_type'] as String,
-                              subTitleText:
-                                  'Masuk: ${formatDateTime(DateTime.parse(it['check_in_time'] as String))}',
-                              icon: const Icon(Icons.chevron_right),
-                              onTap: () => _pick(it),
-                            ),
-                          );
-                        },
-                      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: TextField(
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                hintText: 'Cari plat nomor…',
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              onChanged: (v) => setState(
+                  () => _query = v.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '')),
+            ),
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(_error!),
+                              const SizedBox(height: 8),
+                              GFButton(onPressed: _load, text: 'Coba Lagi'),
+                            ],
+                          ),
+                        )
+                      : Builder(
+                          builder: (_) {
+                            final shown = _items.where((e) {
+                              final m = e as Map<String, dynamic>;
+                              if (_query.isEmpty) return true;
+                              final plat = ((m['plat_nomor'] as String?) ?? '').toUpperCase();
+                              final code = ((m['barcode_data'] as String?) ?? '').toUpperCase();
+                              return plat.contains(_query) || code.contains(_query);
+                            }).toList();
+                            if (shown.isEmpty) {
+                              return const Center(child: Text('Tidak ada kendaraan parkir.'));
+                            }
+                            return ListView.builder(
+                              padding: const EdgeInsets.all(12),
+                              itemCount: shown.length,
+                              itemBuilder: (_, i) {
+                                final it = shown[i] as Map<String, dynamic>;
+                                return GFCard(
+                                  padding: EdgeInsets.zero,
+                                  content: GFListTile(
+                                    avatar: ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.network(
+                                        it['photo_url'] as String,
+                                        width: 64,
+                                        height: 64,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, err, stack) => const Icon(Icons.image_not_supported),
+                                      ),
+                                    ),
+                                    titleText: (it['plat_nomor'] as String?) ?? (it['vehicle_type'] as String),
+                                    subTitleText:
+                                        '${it['vehicle_type']} • Masuk: ${formatDateTime(DateTime.parse(it['check_in_time'] as String))}',
+                                    icon: const Icon(Icons.chevron_right),
+                                    onTap: () => _pick(it),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+            ),
+          ),
+        ],
       ),
     );
   }

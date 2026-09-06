@@ -10,20 +10,22 @@ import '../utils.dart';
 import 'ticket_screen.dart';
 
 /// Tab Check-In: kamera langsung tampil.
-/// Alur: jepret → bottom sheet ACC (foto + jenis kendaraan) → kompres ≤500KB
-/// → generate barcode → upload → simpan → tampil QR fullscreen.
+/// [active] mengikuti tab bawah: controller kamera hanya hidup saat tab ini
+/// tampil, karena texture kamera mati (layar hitam) kalau tab offstage.
 class CheckinScreen extends StatefulWidget {
-  const CheckinScreen({super.key});
+  final bool active;
+  const CheckinScreen({super.key, this.active = true});
 
   @override
   State<CheckinScreen> createState() => _CheckinScreenState();
 }
 
 class _CheckinScreenState extends State<CheckinScreen>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
   CameraController? _cam;
   String? _camError;
   bool _taking = false;
+  bool _starting = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -31,13 +33,39 @@ class _CheckinScreenState extends State<CheckinScreen>
   @override
   void initState() {
     super.initState();
-    _initCamera();
+    WidgetsBinding.instance.addObserver(this);
+    if (widget.active) _startCamera();
   }
 
-  Future<void> _initCamera() async {
+  @override
+  void didUpdateWidget(CheckinScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.active && !old.active) {
+      _startCamera();
+    } else if (!widget.active && old.active) {
+      _stopCamera();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) return;
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _stopCamera();
+    } else if (state == AppLifecycleState.resumed && widget.active) {
+      _startCamera();
+    }
+  }
+
+  Future<void> _startCamera() async {
+    if (_starting || _cam != null) return;
+    _starting = true;
+    setState(() => _camError = null);
     try {
       final cams = await availableCameras();
       if (cams.isEmpty) {
+        if (!mounted) return;
         setState(() => _camError = 'Tidak ada kamera di HP ini.');
         return;
       }
@@ -45,10 +73,13 @@ class _CheckinScreenState extends State<CheckinScreen>
         (c) => c.lensDirection == CameraLensDirection.back,
         orElse: () => cams.first,
       );
-      final ctrl = CameraController(back, ResolutionPreset.high,
+      final ctrl = CameraController(back, ResolutionPreset.medium,
           enableAudio: false);
       await ctrl.initialize();
-      if (!mounted) return;
+      if (!mounted) {
+        await ctrl.dispose();
+        return;
+      }
       setState(() => _cam = ctrl);
     } on CameraException catch (e) {
       if (!mounted) return;
@@ -56,11 +87,23 @@ class _CheckinScreenState extends State<CheckinScreen>
     } catch (_) {
       if (!mounted) return;
       setState(() => _camError = 'Kamera tidak bisa dibuka.');
+    } finally {
+      _starting = false;
     }
+  }
+
+  Future<void> _stopCamera() async {
+    final cam = _cam;
+    _cam = null;
+    try {
+      await cam?.dispose();
+    } catch (_) {}
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cam?.dispose();
     super.dispose();
   }
@@ -93,7 +136,7 @@ class _CheckinScreenState extends State<CheckinScreen>
     }
   }
 
-  /// Bottom sheet ACC: pratinjau foto + pilih jenis + tombol simpan.
+  /// Bottom sheet ACC: pratinjau foto + plat + pilih jenis + tombol simpan.
   Future<void> _showAccSheet(File photo) async {
     String vehicle = 'MOTOR';
     await showModalBottomSheet(
@@ -108,9 +151,9 @@ class _CheckinScreenState extends State<CheckinScreen>
             photo: photo,
             vehicle: vehicle,
             onVehicle: (v) => setSheet(() => vehicle = v),
-            onConfirm: () async {
+            onConfirm: (plat) async {
               Navigator.of(ctx).pop();
-              await _submit(photo, vehicle);
+              await _submit(photo, vehicle, plat);
             },
           ),
         );
@@ -118,44 +161,10 @@ class _CheckinScreenState extends State<CheckinScreen>
     );
   }
 
-  Future<void> _submit(File photo, String vehicle) async {
+  Future<void> _submit(File photo, String vehicle, String plat) async {
     final session = SessionScope.of(context);
-    _progress('Mengompres foto…');
-    // 1. Kompres max 500KB
-    final compressed = await ImageCompressorService.compressToTarget(
-      photo,
-      options: ImageCompressorOptions(
-        targetSizeInKB: AppConfig.maxPhotoKb,
-        maxWidth: 1600,
-        maxHeight: 1200,
-        format: CompressFormat.jpeg,
-        minQuality: 40,
-      ),
-    );
-    // 2. Generate barcode di Flutter
-    final barcode = genBarcode(AppConfig.qrPrefix, session.parkingId);
-    // 3. Upload foto
-    _progress('Mengupload foto…');
-    final photoUrl =
-        await session.api.uploadCheckinPhoto(compressed.file, barcode);
-    // 4. Simpan transaksi
-    _progress('Menyimpan check-in…');
-    await session.api.checkin(
-      barcode: barcode,
-      vehicleType: vehicle,
-      photoUrl: photoUrl,
-    );
-    if (!mounted) return;
-    Navigator.of(context).pop(); // tutup progress
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => TicketScreen(barcode: barcode, vehicle: vehicle)),
-    );
-    try {
-      await photo.delete();
-    } catch (_) {}
-  }
-
-  void _progress(String text) {
+    // Satu dialog progres untuk semua tahap (kompres → upload → simpan).
+    final step = ValueNotifier('Mengompres foto…');
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -164,11 +173,67 @@ class _CheckinScreenState extends State<CheckinScreen>
           children: [
             const CircularProgressIndicator(),
             const SizedBox(width: 16),
-            Expanded(child: Text(text)),
+            Expanded(
+              child: ValueListenableBuilder<String>(
+                valueListenable: step,
+                builder: (_, text, child) => Text(text),
+              ),
+            ),
           ],
         ),
       ),
     );
+    try {
+      // 1. Kompres max 500KB (resolusi dibatasi agar cepat di HP kentang)
+      final compressed = await ImageCompressorService.compressToTarget(
+        photo,
+        options: ImageCompressorOptions(
+          targetSizeInKB: AppConfig.maxPhotoKb,
+          maxWidth: AppConfig.maxPhotoWidth,
+          maxHeight: AppConfig.maxPhotoHeight,
+          format: CompressFormat.jpeg,
+          minQuality: 40,
+          maxTotalTrials: 12,
+        ),
+      );
+      // 2. Generate barcode di Flutter
+      final barcode = genBarcode(AppConfig.qrPrefix, session.parkingId);
+      // 3. Upload foto
+      step.value = 'Mengupload foto…';
+      final photoUrl =
+          await session.api.uploadCheckinPhoto(compressed.file, barcode);
+      // 4. Simpan transaksi
+      step.value = 'Menyimpan check-in…';
+      await session.api.checkin(
+        barcode: barcode,
+        platNomor: plat,
+        vehicleType: vehicle,
+        photoUrl: photoUrl,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(); // tutup progres
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => TicketScreen(barcode: barcode, plat: plat, vehicle: vehicle)),
+      );
+      try {
+        await photo.delete();
+      } catch (_) {}
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop(); // tutup progres
+      if (e.unauthorized) {
+        await session.logout();
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop(); // tutup progres
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Gagal check-in: $e')));
+    } finally {
+      step.dispose();
+    }
   }
 
   @override
@@ -177,14 +242,21 @@ class _CheckinScreenState extends State<CheckinScreen>
     final cam = _cam;
     return Scaffold(
       appBar: GFAppBar(
-        title: const Text('Check In Kendaraan'),
+        title: const Text('Scan Masuk'),
         centerTitle: true,
       ),
       body: Column(
         children: [
           Expanded(
-            child: _camError != null
-                ? Center(
+            child: !widget.active
+                ? const ColoredBox(
+                    color: Colors.black,
+                    child: Center(
+                      child: CircularProgressIndicator(color: Colors.white),
+                    ),
+                  )
+                : _camError != null
+                    ? Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Column(
@@ -200,7 +272,7 @@ class _CheckinScreenState extends State<CheckinScreen>
                                 _camError = null;
                                 _cam = null;
                               });
-                              _initCamera();
+                              _startCamera();
                             },
                             text: 'Coba Lagi',
                             icon: const Icon(Icons.refresh, color: Colors.white),
@@ -251,12 +323,12 @@ class _CheckinScreenState extends State<CheckinScreen>
   }
 }
 
-/// Isi bottom sheet ACC check-in.
-class _AccSheet extends StatelessWidget {
+/// Isi bottom sheet ACC check-in (dengan input plat nomor wajib).
+class _AccSheet extends StatefulWidget {
   final File photo;
   final String vehicle;
   final ValueChanged<String> onVehicle;
-  final Future<void> Function() onConfirm;
+  final Future<void> Function(String plat) onConfirm;
 
   const _AccSheet({
     required this.photo,
@@ -266,11 +338,25 @@ class _AccSheet extends StatelessWidget {
   });
 
   @override
+  State<_AccSheet> createState() => _AccSheetState();
+}
+
+class _AccSheetState extends State<_AccSheet> {
+  final _platCtrl = TextEditingController();
+  String? _platError;
+
+  @override
+  void dispose() {
+    _platCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final session = SessionScope.of(context);
     String? hint;
     for (final t in session.tariffs) {
-      if (t is Map && t['vehicle_type'] == vehicle) {
+      if (t is Map && t['vehicle_type'] == widget.vehicle) {
         hint = t['mode'] == 'FLAT'
             ? 'Flat ${rupiah((t['flat_price'] as num?) ?? 0)}'
             : '${rupiah((t['price_per_hour'] as num?) ?? 0)}/jam';
@@ -293,21 +379,34 @@ class _AccSheet extends StatelessWidget {
               decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
             ),
             const SizedBox(height: 12),
-            GFTypography(text: 'ACC Check-In', type: GFTypographyType.typo5, showDivider: false),
+            GFTypography(text: 'ACC Scan Masuk', type: GFTypographyType.typo5, showDivider: false),
             const SizedBox(height: 8),
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Image.file(photo, height: 220, width: double.infinity, fit: BoxFit.cover),
+              child: Image.file(widget.photo, height: 200, width: double.infinity, fit: BoxFit.cover),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _platCtrl,
+              textCapitalization: TextCapitalization.characters,
+              decoration: InputDecoration(
+                labelText: 'Plat nomor (wajib)',
+                hintText: 'cth: B1234ABC',
+                prefixIcon: const Icon(Icons.confirmation_number_outlined),
+                border: const OutlineInputBorder(),
+                isDense: true,
+                errorText: _platError,
+              ),
             ),
             const SizedBox(height: 12),
             Row(
               children: ['MOTOR', 'MOBIL'].map((v) {
-                final active = vehicle == v;
+                final active = widget.vehicle == v;
                 return Expanded(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: GFButton(
-                      onPressed: () => onVehicle(v),
+                      onPressed: () => widget.onVehicle(v),
                       text: v,
                       icon: Icon(v == 'MOTOR' ? Icons.two_wheeler : Icons.directions_car, color: Colors.white),
                       color: active ? const Color(0xFF2563EB) : Colors.grey,
@@ -323,7 +422,14 @@ class _AccSheet extends StatelessWidget {
             ],
             const SizedBox(height: 12),
             GFButton(
-              onPressed: onConfirm,
+              onPressed: () {
+                final plat = _platCtrl.text.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+                if (plat.isEmpty) {
+                  setState(() => _platError = 'Plat nomor wajib diisi');
+                  return;
+                }
+                widget.onConfirm(plat);
+              },
               text: 'SIMPAN CHECK-IN',
               icon: const Icon(Icons.check_circle, color: Colors.white),
               color: Colors.green,

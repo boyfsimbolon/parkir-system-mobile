@@ -6,8 +6,9 @@ import 'package:qr_flutter/qr_flutter.dart';
 /// Pengendara screenshot/foto QR ini untuk proses keluar.
 class TicketScreen extends StatelessWidget {
   final String barcode;
+  final String plat;
   final String vehicle;
-  const TicketScreen({super.key, required this.barcode, required this.vehicle});
+  const TicketScreen({super.key, required this.barcode, required this.plat, required this.vehicle});
 
   @override
   Widget build(BuildContext context) {
@@ -22,7 +23,10 @@ class TicketScreen extends StatelessWidget {
               content: Column(
                 children: [
                   GFBadge(text: vehicle, color: const Color(0xFF2563EB)),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
+                  Text(plat,
+                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 2)),
+                  const SizedBox(height: 8),
                   QrImageView(data: barcode, size: 260),
                   const SizedBox(height: 12),
                   SelectableText(barcode,
@@ -40,7 +44,7 @@ class TicketScreen extends StatelessWidget {
             const SizedBox(height: 12),
             GFButton(
               onPressed: () => Navigator.of(context).pop(),
-              text: 'SELESAI — CHECK-IN LAGI',
+              text: 'SELESAI — SCAN LAGI',
               icon: const Icon(Icons.photo_camera, color: Colors.white),
               fullWidthButton: true,
               size: GFSize.LARGE,
