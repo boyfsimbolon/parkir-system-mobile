@@ -1,6 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:getwidget/getwidget.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:nice_image_compress/nice_image_compress.dart';
 import '../api.dart';
+import '../config.dart';
 import '../main.dart';
 import '../utils.dart';
 
@@ -18,6 +22,29 @@ class CheckoutDetailScreen extends StatefulWidget {
 class _CheckoutDetailScreenState extends State<CheckoutDetailScreen> {
   String _method = 'CASH';
   bool _paying = false;
+  File? _stnkFile;
+  String? _stnkUrl;
+  bool _stnkUploading = false;
+
+  Widget _row(String label, String value, {bool bold = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(label, style: const TextStyle(color: Colors.black54)),
+          ),
+          Expanded(
+            child: Text(value,
+                textAlign: TextAlign.right,
+                style: TextStyle(fontWeight: bold ? FontWeight.bold : FontWeight.w500)),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -25,6 +52,11 @@ class _CheckoutDetailScreenState extends State<CheckoutDetailScreen> {
     final fee = widget.preview['fee'] as Map<String, dynamic>;
     final qrisUrl = widget.preview['qris_image_url'] as String?;
     final amount = (fee['amount'] as num?) ?? 0;
+    final plat = (trx['plat_nomor'] as String?)?.trim();
+    final isPerJam = (fee['mode'] as String?) == 'PER_JAM';
+    final rateText = isPerJam
+        ? '${rupiah((fee['rate_per_hour'] as num?) ?? 0)}/jam'
+        : 'Flat ${rupiah((fee['flat_price'] as num?) ?? 0)}';
 
     return Scaffold(
       appBar: GFAppBar(
@@ -54,6 +86,7 @@ class _CheckoutDetailScreenState extends State<CheckoutDetailScreen> {
                     child: Image.network(
                       trx['photo_url'] as String,
                       height: 240,
+                      width: double.infinity,
                       fit: BoxFit.cover,
                       errorBuilder: (_, err, stack) => const SizedBox(
                         height: 120, child: Center(child: Text('Foto tidak termuat'))),
@@ -61,26 +94,44 @@ class _CheckoutDetailScreenState extends State<CheckoutDetailScreen> {
                   ),
                   Padding(
                     padding: const EdgeInsets.all(16),
-                      child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text((trx['plat_nomor'] as String?) ?? '-',
-                            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, letterSpacing: 2)),
-                        const SizedBox(height: 4),
+                        // Plat besar selalu kelihatan (fallback jelas bila data lama kosong)
+                        Container(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0xFFBFDBFE)),
+                          ),
+                          child: Text(
+                            (plat != null && plat.isNotEmpty) ? plat : 'PLAT TIDAK TERCATAT',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                                fontSize: 26, fontWeight: FontWeight.bold, letterSpacing: 3),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        _row('Jenis', '${trx['vehicle_type']} • ${fee['mode'] == 'FLAT' ? 'Flat' : 'Per jam'}'),
+                        _row('Masuk',
+                            formatDateTime(DateTime.parse(trx['check_in_time'] as String))),
+                        _row('Durasi',
+                            '${formatDuration((fee['minutes'] as num?)?.toInt() ?? 0)} (${(fee['hours'] as num?) ?? 0} jam)'),
+                        _row('Tarif toko', rateText),
+                        const Divider(height: 20),
                         Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            GFBadge(text: trx['vehicle_type'] as String, color: const Color(0xFF2563EB)),
-                            const SizedBox(width: 8),
-                            GFBadge(text: fee['mode'] as String, color: Colors.grey),
+                            const Text('Total bayar',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                            Text(rupiah(amount),
+                                style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF16A34A))),
                           ],
                         ),
-                        const SizedBox(height: 8),
-                        Text('Masuk: ${formatDateTime(DateTime.parse(trx['check_in_time'] as String))}'),
-                        Text('Durasi: ${formatDuration((fee['minutes'] as num?)?.toInt() ?? 0)} '
-                            '(${(fee['hours'] as num?) ?? 0} jam)'),
-                        const SizedBox(height: 4),
-                        Text('Biaya: ${rupiah(amount)}',
-                            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                       ],
                     ),
                   ),
@@ -88,6 +139,8 @@ class _CheckoutDetailScreenState extends State<CheckoutDetailScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            if (widget.manual) _stnkCard(plat),
+            if (widget.manual) const SizedBox(height: 12),
             const GFTypography(text: 'Metode pembayaran', type: GFTypographyType.typo6, showDivider: false),
             const SizedBox(height: 8),
             Row(
@@ -136,14 +189,127 @@ class _CheckoutDetailScreenState extends State<CheckoutDetailScreen> {
     );
   }
 
+  /// Kartu verifikasi STNK (wajib di checkout manual): foto STNK pengendara,
+  /// pastikan platnya sama dengan plat terparkir.
+  Widget _stnkCard(String? plat) {
+    return GFCard(
+      padding: const EdgeInsets.all(16),
+      content: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const GFTypography(text: 'Verifikasi STNK (wajib)', type: GFTypographyType.typo6, showDivider: false),
+          const SizedBox(height: 4),
+          Text(
+            'Minta pengendara menunjukkan STNK, pastikan platnya sama dengan ${plat ?? 'data parkir'}. Foto STNK sebagai bukti.',
+            style: const TextStyle(color: Colors.black54, fontSize: 13),
+          ),
+          const SizedBox(height: 10),
+          if (_stnkFile != null)
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.file(_stnkFile!, height: 160, width: double.infinity, fit: BoxFit.cover),
+                ),
+                if (_stnkUrl != null)
+                  const Positioned(
+                    top: 8,
+                    right: 8,
+                    child: GFBadge(text: 'TERUPLOAD', color: Colors.green),
+                  ),
+                if (_stnkUploading)
+                  const Positioned.fill(
+                    child: Center(child: CircularProgressIndicator(color: Colors.white)),
+                  ),
+              ],
+            )
+          else
+            GFButton(
+              onPressed: _stnkUploading ? null : _captureStnk,
+              text: _stnkUploading ? 'MENGUPLOAD…' : 'FOTO STNK',
+              icon: const Icon(Icons.badge, color: Colors.white),
+              color: const Color(0xFF2563EB),
+              fullWidthButton: true,
+            ),
+          if (_stnkFile != null && !_stnkUploading && _stnkUrl == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: GFButton(
+                onPressed: _captureStnk,
+                text: 'FOTO ULANG',
+                type: GFButtonType.outline,
+                fullWidthButton: true,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _captureStnk() async {
+    final trx = widget.preview['transaction'] as Map<String, dynamic>;
+    final shot = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 85);
+    if (shot == null || !mounted) return;
+    setState(() {
+      _stnkFile = File(shot.path);
+      _stnkUrl = null;
+      _stnkUploading = true;
+    });
+    try {
+      final compressed = await ImageCompressorService.compressToTarget(
+        _stnkFile!,
+        options: ImageCompressorOptions(
+          targetSizeInKB: AppConfig.maxPhotoKb,
+          maxWidth: AppConfig.maxPhotoWidth,
+          maxHeight: AppConfig.maxPhotoHeight,
+          format: CompressFormat.jpeg,
+          minQuality: 40,
+          maxTotalTrials: 12,
+        ),
+      );
+      final url = await SessionScope.of(context)
+          .api
+          .uploadStnkPhoto(compressed.file, (trx['id'] as num).toInt());
+      if (!mounted) return;
+      setState(() => _stnkUrl = url);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.unauthorized) {
+        await SessionScope.of(context).logout();
+        return;
+      }
+      setState(() {
+        _stnkFile = null;
+        _stnkUploading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      return;
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _stnkFile = null;
+        _stnkUploading = false;
+      });
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Gagal upload STNK: $e')));
+      return;
+    }
+    if (mounted) setState(() => _stnkUploading = false);
+  }
+
   Future<void> _pay(num amount) async {
+    if (widget.manual && _stnkUrl == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Foto STNK wajib dulu sebelum bayar.')));
+      return;
+    }
     setState(() => _paying = true);
     final session = SessionScope.of(context);
     try {
       final api = session.api;
       final trx = widget.preview['transaction'] as Map<String, dynamic>;
       if (widget.manual) {
-        await api.lostQrCheckout((trx['id'] as num).toInt(), _method);
+        await api.lostQrCheckout((trx['id'] as num).toInt(), _method, stnkPhotoUrl: _stnkUrl);
       } else {
         await api.checkout(trx['barcode_data'] as String, _method);
       }

@@ -112,8 +112,13 @@ class ApiClient {
   Future<Map<String, dynamic>> checkout(String barcode, String method) =>
       _post('/api/mobile/checkout', {'barcode_data': barcode, 'payment_method': method});
 
-  Future<Map<String, dynamic>> lostQrCheckout(int id, String method) =>
-      _post('/api/mobile/lost-qr', {'transaction_id': id, 'payment_method': method});
+  Future<Map<String, dynamic>> lostQrCheckout(int id, String method,
+          {String? stnkPhotoUrl}) =>
+      _post('/api/mobile/lost-qr', {
+        'transaction_id': id,
+        'payment_method': method,
+        if (stnkPhotoUrl != null) 'stnk_photo_url': stnkPhotoUrl,
+      });
 
   Future<Map<String, dynamic>> checkin({
     required String barcode,
@@ -128,8 +133,28 @@ class ApiClient {
         'photo_url': photoUrl,
       });
 
-  /// Upload foto check-in. Mengembalikan public URL.
-  Future<String> uploadCheckinPhoto(File file, String barcode) async {
+  /// Upload foto bukti STNK (checkout manual). Mengembalikan public URL.
+  Future<String> uploadStnkPhoto(File file, int transactionId) async {
+    final t = tokenProvider();
+    final req = http.MultipartRequest('POST', Uri.parse('${AppConfig.apiBaseUrl}/api/upload'));
+    if (t != null && t.isNotEmpty) req.headers['Authorization'] = 'Bearer $t';
+    req.fields['kind'] = 'stnk';
+    req.fields['ref'] = transactionId.toString();
+    req.files.add(await http.MultipartFile.fromPath('file', file.path,
+        contentType: http.MediaType('image', 'jpeg')));
+    final streamed = await req.send().timeout(Duration(seconds: AppConfig.apiTimeoutSeconds * 3));
+    final body = await streamed.stream.bytesToString();
+    if (streamed.statusCode != 200) {
+      String msg = 'Upload STNK gagal (${streamed.statusCode})';
+      try {
+        final b = jsonDecode(body);
+        if (b is Map && b['error'] is String) msg = b['error'] as String;
+      } catch (_) {}
+      throw ApiException(streamed.statusCode, msg);
+    }
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    return data['url'] as String;
+  }
     final t = tokenProvider();
     final req = http.MultipartRequest('POST', Uri.parse('${AppConfig.apiBaseUrl}/api/upload'));
     if (t != null && t.isNotEmpty) req.headers['Authorization'] = 'Bearer $t';
