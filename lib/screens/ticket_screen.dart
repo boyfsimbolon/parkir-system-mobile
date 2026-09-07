@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:getwidget/getwidget.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import '../utils.dart';
 
 /// QR tiket fullscreen setelah check-in berhasil.
 /// Pengendara screenshot/foto QR ini untuk proses keluar.
@@ -8,7 +9,9 @@ class TicketScreen extends StatelessWidget {
   final String barcode;
   final String plat;
   final String vehicle;
-  const TicketScreen({super.key, required this.barcode, required this.plat, required this.vehicle});
+  /// Jam check-in (dari server) — ditampilkan di tiket.
+  final DateTime checkIn;
+  const TicketScreen({super.key, required this.barcode, required this.plat, required this.vehicle, required this.checkIn});
 
   @override
   Widget build(BuildContext context) {
@@ -26,6 +29,9 @@ class TicketScreen extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(plat,
                       style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 2)),
+                  const SizedBox(height: 4),
+                  Text('Masuk: ${formatDateTime(checkIn)}',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black54)),
                   const SizedBox(height: 8),
                   QrImageView(data: barcode, size: 260),
                   const SizedBox(height: 12),

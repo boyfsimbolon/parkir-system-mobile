@@ -19,6 +19,9 @@ class _ActivationScreenState extends State<ActivationScreen> {
   bool _busy = false;
   String? _error;
   String? _notice;
+  /// Auto-retry scanner (transient) + pesan kamera bila gagal permanen.
+  int _scanRetry = 0;
+  bool _retryScheduled = false;
 
   @override
   void initState() {
@@ -81,7 +84,67 @@ class _ActivationScreenState extends State<ActivationScreen> {
             flex: 5,
             child: Stack(
               children: [
-                MobileScanner(controller: _controller, onDetect: _onDetect),
+                MobileScanner(
+                  controller: _controller,
+                  onDetect: _onDetect,
+                  errorBuilder: (ctx, err) {
+                    if (_scanRetry < 2 &&
+                        !_retryScheduled &&
+                        err.errorCode != MobileScannerErrorCode.permissionDenied) {
+                      _retryScheduled = true;
+                      _scanRetry++;
+                      Future.delayed(const Duration(milliseconds: 1200), () {
+                        _retryScheduled = false;
+                        if (!mounted) return;
+                        _controller.start();
+                      });
+                    }
+                    final denied =
+                        err.errorCode == MobileScannerErrorCode.permissionDenied;
+                    final recovering = !denied && _scanRetry < 2;
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (recovering)
+                              const SizedBox(
+                                width: 40,
+                                height: 40,
+                                child: CircularProgressIndicator(color: Colors.white),
+                              )
+                            else
+                              const Icon(Icons.no_photography,
+                                  size: 48, color: Colors.white70),
+                            const SizedBox(height: 12),
+                            Text(
+                              denied
+                                  ? 'Izin kamera ditolak. Aktifkan di Pengaturan HP → Parkir Getter → Kamera, lalu tekan Coba Lagi.'
+                                  : recovering
+                                      ? 'Menyalakan kamera…'
+                                      : 'Kamera tidak bisa dibuka. Pastikan tidak dipakai aplikasi lain.',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                            if (!recovering) ...[
+                              const SizedBox(height: 12),
+                              GFButton(
+                                onPressed: () {
+                                  _scanRetry = 0;
+                                  _retryScheduled = false;
+                                  _controller.start();
+                                },
+                                text: 'Coba Lagi',
+                                icon: const Icon(Icons.refresh, color: Colors.white),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
                 if (_busy)
                   const Center(child: CircularProgressIndicator(color: Colors.white)),
               ],

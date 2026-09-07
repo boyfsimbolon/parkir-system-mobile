@@ -26,6 +26,9 @@ class _CheckinScreenState extends State<CheckinScreen>
   String? _camError;
   bool _taking = false;
   bool _starting = false;
+  /// Token anti-race: stop/dispose baru membatalkan start lama yang masih
+  /// antre (penyebab "kamera dipakai aplikasi lain" saat pindah tab cepat).
+  int _startSeq = 0;
 
   @override
   bool get wantKeepAlive => true;
@@ -58,41 +61,69 @@ class _CheckinScreenState extends State<CheckinScreen>
     }
   }
 
+  /// Start kamera OTOMATIS + retry: kegagalan transient (driver masih melepas
+  /// kamera layar lain) dicoba ulang 3x jeda 700ms SEBELUM menampilkan error,
+  /// sehingga pesan "Kamera tidak bisa dibuka" jarang muncul. Izin ditolak
+  /// langsung menyerah (retry tidak ada gunanya) dengan pesan yang jelas.
   Future<void> _startCamera() async {
     if (_starting || _cam != null) return;
     _starting = true;
+    final seq = ++_startSeq;
     setState(() => _camError = null);
     try {
-      final cams = await availableCameras();
-      if (cams.isEmpty) {
-        if (!mounted) return;
-        setState(() => _camError = 'Tidak ada kamera di HP ini.');
-        return;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        if (seq != _startSeq || !mounted) return;
+        try {
+          final cams = await availableCameras();
+          if (cams.isEmpty) {
+            if (!mounted || seq != _startSeq) return;
+            setState(() => _camError = 'Tidak ada kamera di HP ini.');
+            return;
+          }
+          final back = cams.firstWhere(
+            (c) => c.lensDirection == CameraLensDirection.back,
+            orElse: () => cams.first,
+          );
+          final ctrl = CameraController(back, ResolutionPreset.medium,
+              enableAudio: false);
+          await ctrl.initialize();
+          if (seq != _startSeq || !mounted) {
+            await ctrl.dispose();
+            return;
+          }
+          setState(() => _cam = ctrl);
+          return;
+        } on CameraException catch (e) {
+          final denied = _isPermissionDenied(e.code);
+          if (denied || attempt == 2 || seq != _startSeq || !mounted) {
+            if (!mounted || seq != _startSeq) return;
+            setState(() => _camError = denied
+                ? 'Izin kamera ditolak. Aktifkan di Pengaturan HP → Parkir Getter → Kamera, lalu tekan Coba Lagi.'
+                : 'Kamera sedang disiapkan. Tunggu sebentar lalu tekan Coba Lagi.');
+            return;
+          }
+          await Future.delayed(const Duration(milliseconds: 700));
+        } catch (_) {
+          if (attempt == 2 || seq != _startSeq || !mounted) {
+            if (!mounted || seq != _startSeq) return;
+            setState(() => _camError = 'Kamera tidak bisa dibuka. Tunggu sebentar lalu tekan Coba Lagi.');
+            return;
+          }
+          await Future.delayed(const Duration(milliseconds: 700));
+        }
       }
-      final back = cams.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
-        orElse: () => cams.first,
-      );
-      final ctrl = CameraController(back, ResolutionPreset.medium,
-          enableAudio: false);
-      await ctrl.initialize();
-      if (!mounted) {
-        await ctrl.dispose();
-        return;
-      }
-      setState(() => _cam = ctrl);
-    } on CameraException catch (e) {
-      if (!mounted) return;
-      setState(() => _camError = 'Kamera tidak bisa dibuka (${e.code}). Beri izin kamera lalu buka ulang tab ini.');
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _camError = 'Kamera tidak bisa dibuka.');
     } finally {
       _starting = false;
     }
   }
 
+  bool _isPermissionDenied(String code) =>
+      code == 'CameraAccessDenied' ||
+      code == 'CameraAccessDeniedWithoutPrompt' ||
+      code == 'CameraAccessRestricted';
+
   Future<void> _stopCamera() async {
+    _startSeq++; // batalkan start yang mungkin masih antre/jalan
     final cam = _cam;
     _cam = null;
     try {
@@ -103,6 +134,7 @@ class _CheckinScreenState extends State<CheckinScreen>
 
   @override
   void dispose() {
+    _startSeq++; // batalkan start yang mungkin masih antre
     WidgetsBinding.instance.removeObserver(this);
     _cam?.dispose();
     super.dispose();
@@ -208,18 +240,25 @@ class _CheckinScreenState extends State<CheckinScreen>
       step.value = 'Mengupload foto…';
       final photoUrl =
           await session.api.uploadCheckinPhoto(compressed.file, barcode);
-      // 4. Simpan transaksi
+      // 4. Simpan transaksi (respons membawa check_in_time dari server
+      // untuk ditampilkan sebagai jam check-in di tiket).
       step.value = 'Menyimpan check-in…';
-      await session.api.checkin(
+      final res = await session.api.checkin(
         barcode: barcode,
         platNomor: plat,
         vehicleType: vehicle,
         photoUrl: photoUrl,
       );
+      DateTime? checkIn;
+      try {
+        final t = res['transaction'] as Map<String, dynamic>?;
+        final s = t?['check_in_time'] as String?;
+        if (s != null) checkIn = DateTime.parse(s);
+      } catch (_) {}
       if (!mounted) return;
       Navigator.of(context).pop(); // tutup progres
       Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => TicketScreen(barcode: barcode, plat: plat, vehicle: vehicle)),
+        MaterialPageRoute(builder: (_) => TicketScreen(barcode: barcode, plat: plat, vehicle: vehicle, checkIn: checkIn ?? DateTime.now())),
       );
       try {
         await photo.delete();

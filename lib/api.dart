@@ -7,11 +7,18 @@ import 'config.dart';
 class ApiException implements Exception {
   final int status;
   final String message;
-  ApiException(this.status, this.message);
+  /// Body error terstruktur (mis. `transaction` saat 409 ALREADY_CHECKED_OUT).
+  final Map<String, dynamic>? data;
+  ApiException(this.status, this.message, [this.data]);
   bool get unauthorized => status == 401;
-  /// 403 PARKING_DISABLED: parkiran dinonaktifkan — jangan logout,
-  /// refresh sesi agar aplikasi pindah ke layar pemberitahuan.
   bool get parkingDisabled => status == 403;
+  /// QR sudah pernah di-checkout: server menyertakan jam checkout di data.
+  bool get alreadyCheckedOut =>
+      status == 409 && data?['code'] == 'ALREADY_CHECKED_OUT';
+  Map<String, dynamic>? get outTransaction {
+    final t = data?['transaction'];
+    return t is Map<String, dynamic> ? t : null;
+  }
   @override
   String toString() => message;
 }
@@ -33,11 +40,18 @@ class ApiClient {
 
   Never _throw(http.Response r) {
     String msg = 'Terjadi kesalahan (${r.statusCode})';
+    Map<String, dynamic>? data;
     try {
       final b = jsonDecode(r.body);
-      if (b is Map && b['error'] is String) msg = b['error'] as String;
+      if (b is Map<String, dynamic>) {
+        data = b;
+        if (b['error'] is String) msg = b['error'] as String;
+      } else if (b is Map && b['error'] is String) {
+        data = Map<String, dynamic>.from(b);
+        msg = b['error'] as String;
+      }
     } catch (_) {}
-    throw ApiException(r.statusCode, msg);
+    throw ApiException(r.statusCode, msg, data);
   }
 
   Future<Map<String, dynamic>> _get(String path, {bool retried = false}) async {

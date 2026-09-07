@@ -3,6 +3,7 @@ import 'package:getwidget/getwidget.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../api.dart';
 import '../main.dart';
+import '../utils.dart';
 import 'checkout_detail_screen.dart';
 import 'lostqr_screen.dart';
 
@@ -22,6 +23,10 @@ class _CheckoutScanScreenState extends State<CheckoutScanScreen>
   late final MobileScannerController _controller;
   bool _busy = false;
   String? _camError;
+  /// Auto-retry: kegagalan transient (kamera belum lepas dari tab lain)
+  /// dicoba ulang otomatis 2x jeda 1,2 dtk sebelum menyerah ke tombol manual.
+  int _errRetry = 0;
+  bool _retryScheduled = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -37,6 +42,8 @@ class _CheckoutScanScreenState extends State<CheckoutScanScreen>
   void didUpdateWidget(CheckoutScanScreen old) {
     super.didUpdateWidget(old);
     if (widget.active && !old.active) {
+      _errRetry = 0;
+      _retryScheduled = false;
       setState(() => _camError = null);
       _controller.start();
     } else if (!widget.active && old.active) {
@@ -74,6 +81,11 @@ class _CheckoutScanScreenState extends State<CheckoutScanScreen>
         await session.logout();
         return;
       }
+      // QR sudah pernah di-checkout: tampilkan JAM checkout-nya.
+      if (e.alreadyCheckedOut && e.outTransaction != null) {
+        if (mounted) await showAlreadyCheckedOutDialog(context, e.outTransaction!);
+        return; // finally menyalakan ulang scanner
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
       }
@@ -102,21 +114,46 @@ class _CheckoutScanScreenState extends State<CheckoutScanScreen>
                 MobileScanner(
                   controller: _controller,
                   errorBuilder: (ctx, err) {
-                    final msg = err.errorCode == MobileScannerErrorCode.permissionDenied
+                    // Coba pulihkan otomatis dulu (kasus transient), jangan
+                    // langsung menyerah ke pesan "dipakai aplikasi lain".
+                    if (_errRetry < 2 && !_retryScheduled) {
+                      _retryScheduled = true;
+                      _errRetry++;
+                      Future.delayed(const Duration(milliseconds: 1200), () {
+                        _retryScheduled = false;
+                        if (!mounted || !widget.active) return;
+                        setState(() => _camError = null);
+                        _controller.start();
+                      });
+                    }
+                    final denied = err.errorCode == MobileScannerErrorCode.permissionDenied;
+                    final recovering = !denied && _errRetry < 2;
+                    final msg = denied
                         ? 'Izin kamera ditolak. Aktifkan di Pengaturan HP → Parkir Getter → Kamera.'
-                        : 'Kamera tidak bisa dibuka (${err.errorCode}).';
+                        : recovering
+                            ? 'Kamera sedang disiapkan…'
+                            : 'Kamera tidak bisa dibuka. Pastikan tidak dipakai aplikasi lain.';
                     return Center(
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.no_photography, size: 48, color: Colors.grey),
+                            if (recovering)
+                              const SizedBox(
+                                width: 40,
+                                height: 40,
+                                child: CircularProgressIndicator(),
+                              )
+                            else
+                              const Icon(Icons.no_photography, size: 48, color: Colors.grey),
                             const SizedBox(height: 12),
                             Text(msg, textAlign: TextAlign.center),
                             const SizedBox(height: 12),
                             GFButton(
                               onPressed: () {
+                                _errRetry = 0;
+                                _retryScheduled = false;
                                 setState(() => _camError = null);
                                 _controller.start();
                               },

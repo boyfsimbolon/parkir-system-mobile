@@ -226,6 +226,14 @@ class _CheckoutDetailScreenState extends State<CheckoutDetailScreen> {
         await session.logout();
         return;
       }
+      // Ternyata sudah di-checkout getter lain: tampilkan JAM-nya, lalu kembali.
+      if (e.alreadyCheckedOut && e.outTransaction != null) {
+        if (mounted) {
+          await showAlreadyCheckedOutDialog(context, e.outTransaction!);
+          if (mounted) Navigator.of(context).pop();
+        }
+        return;
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
       }

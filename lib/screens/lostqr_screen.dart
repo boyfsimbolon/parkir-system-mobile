@@ -82,6 +82,12 @@ class _LostQrScreenState extends State<LostQrScreen>
         await session.logout();
         return;
       }
+      // Transaksi sudah pernah checkout: tampilkan JAM-nya, lalu refresh list.
+      if (e.alreadyCheckedOut && e.outTransaction != null) {
+        if (mounted) await showAlreadyCheckedOutDialog(context, e.outTransaction!);
+        _load();
+        return;
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
       }
