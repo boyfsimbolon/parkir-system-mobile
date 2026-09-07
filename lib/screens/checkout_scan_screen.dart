@@ -64,6 +64,12 @@ class _CheckoutScanScreenState extends State<CheckoutScanScreen>
         ),
       );
     } on ApiException catch (e) {
+      if (e.parkingDisabled) {
+        try {
+          await session.refresh();
+        } catch (_) {}
+        return;
+      }
       if (e.unauthorized) {
         await session.logout();
         return;

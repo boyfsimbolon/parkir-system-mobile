@@ -216,6 +216,12 @@ class _CheckoutDetailScreenState extends State<CheckoutDetailScreen> {
       );
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {
+      if (e.parkingDisabled) {
+        try {
+          await session.refresh();
+        } catch (_) {}
+        return;
+      }
       if (e.unauthorized) {
         await session.logout();
         return;

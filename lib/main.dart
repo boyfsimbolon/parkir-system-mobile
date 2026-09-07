@@ -4,6 +4,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'session.dart';
 import 'screens/activation_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/suspended_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,7 +44,10 @@ class ParkirApp extends StatelessWidget {
             if (!session.loaded) {
               return const Scaffold(body: Center(child: CircularProgressIndicator()));
             }
-            return session.loggedIn ? const HomeScreen() : const ActivationScreen();
+            if (!session.loggedIn) return const ActivationScreen();
+            // Parkiran dinonaktifkan: kunci ke pemberitahuan (tetap login).
+            if (session.parkingSuspended) return const SuspendedScreen();
+            return const HomeScreen();
           },
         ),
       ),

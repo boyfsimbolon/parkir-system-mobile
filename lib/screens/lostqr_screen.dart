@@ -40,6 +40,12 @@ class _LostQrScreenState extends State<LostQrScreen>
       if (!mounted) return;
       setState(() => _items = (data['parked'] as List?) ?? []);
     } on ApiException catch (e) {
+      if (e.parkingDisabled) {
+        try {
+          await session.refresh();
+        } catch (_) {}
+        return;
+      }
       if (e.unauthorized) {
         await session.logout();
         return;
@@ -66,6 +72,12 @@ class _LostQrScreenState extends State<LostQrScreen>
       );
       _load();
     } on ApiException catch (e) {
+      if (e.parkingDisabled) {
+        try {
+          await session.refresh();
+        } catch (_) {}
+        return;
+      }
       if (e.unauthorized) {
         await session.logout();
         return;

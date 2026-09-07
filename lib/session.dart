@@ -30,6 +30,10 @@ class SessionManager extends ChangeNotifier {
 
   String? get token => _token;
   bool get loggedIn => _token != null && _token!.isNotEmpty;
+  /// Parkiran dinonaktifkan superadmin: tetap login, tapi tidak bisa beraktivitas.
+  /// (parking dari /me kini memuat is_active; kunci lama tanpa field = dianggap aktif.)
+  bool get parkingSuspended =>
+      loggedIn && parking != null && parking!['is_active'] == false;
   int get parkingId {
     final p = parking?['id'];
     if (p is int) return p;

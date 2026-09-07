@@ -9,6 +9,9 @@ class ApiException implements Exception {
   final String message;
   ApiException(this.status, this.message);
   bool get unauthorized => status == 401;
+  /// 403 PARKING_DISABLED: parkiran dinonaktifkan — jangan logout,
+  /// refresh sesi agar aplikasi pindah ke layar pemberitahuan.
+  bool get parkingDisabled => status == 403;
   @override
   String toString() => message;
 }

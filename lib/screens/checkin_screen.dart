@@ -118,6 +118,12 @@ class _CheckinScreenState extends State<CheckinScreen>
       if (!mounted) return;
       await _showAccSheet(File(shot.path));
     } on ApiException catch (e) {
+      if (e.parkingDisabled) {
+        try {
+          await session.refresh();
+        } catch (_) {}
+        return;
+      }
       if (e.unauthorized) {
         await session.logout();
         return;
@@ -221,6 +227,12 @@ class _CheckinScreenState extends State<CheckinScreen>
     } on ApiException catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop(); // tutup progres
+      if (e.parkingDisabled) {
+        try {
+          await session.refresh();
+        } catch (_) {}
+        return;
+      }
       if (e.unauthorized) {
         await session.logout();
         return;
